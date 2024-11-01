@@ -135,7 +135,7 @@ def build_sam_vit_t(args, checkpoint=None,  num_classes = 1):
             mask_decoder=MaskDecoder(
                     #num_multimask_outputs=num_classes,
                     ####num_multimask_outputs=args.num_cls,#num_classes,
-                    num_multimask_outputs= 2,
+                    num_multimask_outputs= 3,
                     transformer=TwoWayTransformer(
                     args = args,
                     depth=2,

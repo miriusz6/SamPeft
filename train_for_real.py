@@ -1,34 +1,12 @@
-from skimage.measure import label
+
 
 #Scientific computing 
 import numpy as np
-import os
-#Pytorch packages
+
 import torch
-from torch import nn
-import torch.optim as optim
-import torchvision
-#from torchvision import datasets
-from tensorboardX import SummaryWriter
-#Visulization
-import matplotlib.pyplot as plt
-from torchvision import transforms
+
 from PIL import Image
-#Others
-#from torch.utils.data import DataLoader, Subset
-from torch.autograd import Variable
-import matplotlib.pyplot as plt
-import copy
-#from finetuneSAM.utils.dataset import Public_dataset
-import torch.nn.functional as F
-from torch.nn.functional import one_hot
-from pathlib import Path
-from tqdm import tqdm
-#from finetuneSAM.utils.losses import DiceLoss
-#from finetuneSAM.utils.dsc import dice_coeff_multi_class
-import cv2
-import monai
-#from finetuneSAM.utils.utils import vis_image
+
 
 
 # General
@@ -39,14 +17,9 @@ from skimage.measure import label
 
 #Scientific computing 
 import numpy as np
-import os
+
 #Pytorch packages
 import torch
-
-import torchvision
-
-
-import matplotlib.pyplot as plt
 
 from PIL import Image
 
@@ -55,10 +28,10 @@ import matplotlib.pyplot as plt
 
 
 from finetuneSAM.models.sam.utils.transforms import ResizeLongestSide
-from finetuneSAM.models.sam import SamPredictor, sam_model_registry
-from finetuneSAM.cfg import parse_args
+from finetuneSAM.models.sam import  sam_model_registry
 
-from mmutils import put_marks, put_mask
+
+
 
 from os import listdir
 from os.path import isfile, join
@@ -110,8 +83,8 @@ def load_model(args):
 
 
 def load_data():
-    train_img_path = '/data/Data/train/image/'
-    train_mask_path = '/data/Data/train/mask/'
+    train_img_path = '/data/DataSmall/train/image/'
+    train_mask_path = '/data/DataSmall/train/mask/'
     train_data = _load_data(train_img_path, train_mask_path)
     
     return train_data    
@@ -130,63 +103,77 @@ def _load_data(img_path, mask_path):
     masks_path = curr_dir+ mask_path#'/data/Data/train/mask/'
     msks_names = [f for f in listdir(masks_path) if isfile(join(masks_path, f))]
 
-    data = {'image': [], 'mask': [], 't_points': [], 'bg_points': []}
+    
+    ts = 5
+    bgs = 5
+    labels = [1]*ts + [0]*bgs
 
-
+    data = {'image': [], 'mask': [], 'points': [], 'p_labels': []}
 
     for img_name in imgs_names:
         img = Image.open(imgs_path+img_name)
         img = np.asarray(img)
         data['image'].append(img)
     
-    ts = 5
-    bgs = 5
 
     for msk_name in msks_names:
         msk = Image.open(masks_path+msk_name)
         msk = np.asarray(msk)
         msk = np.where(msk>0, 1, 0)
-        #t_points = choose_target_points(msk, ts, min_dist=50)
-        #bg_points = choose_bg_points(msk, bgs, min_dist=50)
+        t_points = choose_target_points(msk, ts, min_dist=50)
+        bg_points = choose_bg_points(msk, bgs, min_dist=50)
         #make dummy points
-        t_points = np.array([[70,235],[218,92],[154,360]])
-        bg_points = np.array([[259,257],[192,148],[220,435]])
-        data['t_points'].append(t_points)
-        data['bg_points'].append(bg_points)
+        # t_points = [(1,1)]*ts
+        # bg_points = [(2,2)]*bgs
+        points = np.zeros((ts+bgs,2))
+        points[:ts] = t_points
+        points[ts:] = bg_points
+        data['points'].append(points)
+        data['p_labels'].append(labels)
         data['mask'].append(msk)
+
+    
     return data
 
-
+from torch.nn import Upsample
 class Sammy:
     
-    def __init__(self, model):
+    def __init__(self, model, orginal_input_size):
         self.model = model
-        self.input_image = None
-        self.transform = None
+        self.garbage = None
 
-    def set_image(self,input_img):
-        self.transform = ResizeLongestSide(input_img.shape[0])
-        self.input_image = self.transform.apply_image(input_img)
+
+        self.input_img_scale = 1024/orginal_input_size[0]
+        self.output_mask_scale = 256/orginal_input_size[0]
+
+        self.input_img_scaleF = Upsample(scale_factor=self.input_img_scale)
+        self.output_mask_scaleF = Upsample(scale_factor=self.output_mask_scale)
+
         
-
-    def encode_img(self):
+    def encode_img(self, input_images: np.ndarray):
+        """
+        Encodes the input images using a pre-trained model.
+        Args:
+            input_images (torch.Tensor): The input images to be encoded.[B,3,H,W]
+        Returns:
+            torch.Tensor: The encoded features of the input images.
+        """
+        
         #set_image
-        transformed_img = self.transform.apply_image(self.input_image)
-        transformed_img = torch.as_tensor(transformed_img, device=device)
-        transformed_img = transformed_img.permute(2, 0, 1).contiguous()[None, :, :, :]
-        transformed_img = self.model.preprocess(transformed_img)
-        features = self.model.image_encoder(transformed_img)
+        input_images = np.array(input_images)
+        transformed_imgs = torch.as_tensor(input_images, device=device)
+        transformed_imgs = transformed_imgs.permute(0, 3, 1, 2)#.contiguous()
+        transformed_imgs = self.input_img_scaleF(transformed_imgs)
+        transformed_imgs = self.model.preprocess(transformed_imgs) 
+        features = self.model.image_encoder(transformed_imgs)
         return features
 
-    def encode_promts(self, t_points, bg_points):
-        labels = [1]*len(t_points) + [0]*len(bg_points)
-        points = np.zeros((len(t_points)+len(bg_points),2))
-        points[:len(t_points)] = t_points
-        points[len(t_points):] = bg_points
-        point_coords = self.transform.apply_coords(points,self.input_image.shape[:2])
-        coords_torch = torch.as_tensor(point_coords, dtype=torch.float, device=device)
+    def encode_promts(self, points, labels):
+        #point_coords = self.transform.apply_coords(points,self.input_image.shape[:2])
+        points = np.array(points) * self.input_img_scale 
+        coords_torch = torch.as_tensor(points, dtype=torch.float, device=device)
         labels_torch = torch.as_tensor(labels, dtype=torch.int, device=device)
-        coords_torch, labels_torch = coords_torch[None, :, :], labels_torch[None, :]
+        #coords_torch, labels_torch = coords_torch[None, :, :], labels_torch[None, :]
 
 
         points=(coords_torch, labels_torch)
@@ -199,6 +186,26 @@ class Sammy:
             )
 
         return sparse_embeddings, dense_embeddings
+        # labels = [1]*len(t_points) + [0]*len(bg_points)
+        # points = np.zeros((len(t_points)+len(bg_points),2))
+        # points[:len(t_points)] = t_points
+        # points[len(t_points):] = bg_points
+        # #point_coords = self.transform.apply_coords(points,self.input_image.shape[:2])
+        # coords_torch = torch.as_tensor(point_coords, dtype=torch.float, device=device)
+        # labels_torch = torch.as_tensor(labels, dtype=torch.int, device=device)
+        # coords_torch, labels_torch = coords_torch[None, :, :], labels_torch[None, :]
+
+
+        # points=(coords_torch, labels_torch)
+
+        # box_torch, mask_input_torch = None, None
+        # sparse_embeddings, dense_embeddings = self.model.prompt_encoder(
+        #         points=points,
+        #         boxes=box_torch,
+        #         masks=mask_input_torch,
+        #     )
+
+        # return sparse_embeddings, dense_embeddings
 
     def decode_features(self, features, sparse_embeddings, dense_embeddings ):
         low_res_masks, iou_predictions = self.model.mask_decoder(
@@ -209,76 +216,10 @@ class Sammy:
             multimask_output= True,
         )
 
-        # Upscale the masks to the original image resolution
-        masks =self.model.postprocess_masks(low_res_masks, (256,256), (512,512))
+        # # Upscale the masks to the original image resolution
+        # masks =self.model.postprocess_masks(low_res_masks, (1024,1024), (1024,1024))
 
 
-        return masks, iou_predictions, low_res_masks
-
-#def predict(model, input_img_size, image: np.ndarray, point = None):
-
-    # torch.no_grad()
-    # org_shape = image.shape
-
-    # transform = ResizeLongestSide(input_img_size) # can be changed?
-
-    # #set_image
-    # input_image = transform.apply_image(image)
-    # input_image_torch = torch.as_tensor(input_image, device=device)
-    # input_image_torch = input_image_torch.permute(2, 0, 1).contiguous()[None, :, :, :]
-
-    # #set_torch_image
-    # transformed_image = input_image_torch
-    # input_size = tuple(transformed_image.shape[-2:])
-    # transformed_image = model.preprocess(transformed_image)
-    # features = model.image_encoder(transformed_image)
-
-
-    # coords_torch, labels_torch, box_torch, mask_input_torch = None, None, None, None
-
-    # # TO DELETE
-    # t1 = np.array([70,235])
-    # t2 = np.array([218,92])
-    # t3 = np.array([154,360])
-    # ts = np.array([t1,t2,t3])
-    # # # background
-    # b1 = np.array([259,257])
-    # b2 = np.array([192,148])
-    # b3 = np.array([220,435])
-    # bs = np.array([b1,b2,b3])
-    # ps = np.array([t1,t2,t3,b1,b2,b3])
-
-    # labels = np.array([1,1,1,0,0,0])
-    
-
-
-    # point_coords = transform.apply_coords(ps, org_shape[:2])
-    # coords_torch = torch.as_tensor(point_coords, dtype=torch.float, device=device)
-    # labels_torch = torch.as_tensor(labels, dtype=torch.int, device=device)
-    # coords_torch, labels_torch = coords_torch[None, :, :], labels_torch[None, :]
-
-
-    # points=(coords_torch, labels_torch)
-    # sparse_embeddings, dense_embeddings = model.prompt_encoder(
-    #         points=points,
-    #         boxes=box_torch,
-    #         masks=mask_input_torch,
-    #     )
-
-    # Predict masks
-    # low_res_masks, iou_predictions = model.mask_decoder(
-    #     image_embeddings = features,
-    #     image_pe= model.prompt_encoder.get_dense_pe(),
-    #     sparse_prompt_embeddings=sparse_embeddings,
-    #     dense_prompt_embeddings=dense_embeddings,
-    #     multimask_output= True,
-    # )
-
-    # # Upscale the masks to the original image resolution
-    # masks = model.postprocess_masks(low_res_masks, input_size, org_shape[:2])
-
-
-    # return masks, iou_predictions, low_res_masks
-
-
+        return iou_predictions, low_res_masks
+        #return None, None, None
 

@@ -70,27 +70,27 @@ from generate_target_ps import choose_bg_points, choose_target_points
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def load_model():
+def load_model(args):
 
-    #Fine-Tune Sam
-    args =  parse_args()
-
-
-    # setting if_mask_decoder_adapter = True puts adapters inside 2-way transformer blocks
-    # this does not change the number of decoder 2-way transformer blocks (def = 2)
-    # decoder_adapt_depth denotes how many of the two 2-way transformer blocks are adapted
+    # #Fine-Tune Sam
+    # args =  parse_args()
 
 
-    # setting if_encoder_adapter = True puts adapters inside TinyViTBlocks in the encoder
-    # this does not change the number of encoder TinyViTBlocks (def = 4)
-    # encoder_adapt_depth (e.g. [1,2]) denotes how deep blocks will be adapted
+    # # setting if_mask_decoder_adapter = True puts adapters inside 2-way transformer blocks
+    # # this does not change the number of decoder 2-way transformer blocks (def = 2)
+    # # decoder_adapt_depth denotes how many of the two 2-way transformer blocks are adapted
 
-    args.finetune_type = "vanilla"
-    #args.finetune_type = "adapter"# "vanilla"
-    #args.if_mask_decoder_adapter = True
-    #args.image_size = 512
-    #args.decoder_adapt_depth = 1
-    args.num_cls = 2
+
+    # # setting if_encoder_adapter = True puts adapters inside TinyViTBlocks in the encoder
+    # # this does not change the number of encoder TinyViTBlocks (def = 4)
+    # # encoder_adapt_depth (e.g. [1,2]) denotes how deep blocks will be adapted
+
+    # args.finetune_type = "vanilla"
+    # #args.finetune_type = "adapter"# "vanilla"
+    # #args.if_mask_decoder_adapter = True
+    # #args.image_size = 512
+    # #args.decoder_adapt_depth = 1
+    # args.num_cls = 2
 
 
     # Load the pre-trained model
@@ -110,12 +110,24 @@ def load_model():
 
 
 def load_data():
+    train_img_path = '/data/Data/train/image/'
+    train_mask_path = '/data/Data/train/mask/'
+    train_data = _load_data(train_img_path, train_mask_path)
+    
+    return train_data    
+    # val_img_path = '/data/Data/val/image/'
+    # val_mask_path = '/data/Data/val/mask/'
+    # val_data = _load_data(val_img_path, val_mask_path)
+    
+    # return {'train': train_data, 'val': val_data}
+
+def _load_data(img_path, mask_path):
     curr_dir = getcwd()
     # images
-    imgs_path = curr_dir+'/data/Data/train/image/'
+    imgs_path = curr_dir+ img_path#'/data/Data/train/image/'
     imgs_names = [f for f in listdir(imgs_path) if isfile(join(imgs_path, f))]
     # masks
-    masks_path = curr_dir+'/data/Data/train/mask/'
+    masks_path = curr_dir+ mask_path#'/data/Data/train/mask/'
     msks_names = [f for f in listdir(masks_path) if isfile(join(masks_path, f))]
 
     data = {'image': [], 'mask': [], 't_points': [], 'bg_points': []}
@@ -133,34 +145,45 @@ def load_data():
     for msk_name in msks_names:
         msk = Image.open(masks_path+msk_name)
         msk = np.asarray(msk)
-        t_points = choose_target_points(msk, ts, min_dist=50)
-        bg_points = choose_bg_points(msk, bgs, min_dist=50)
+        msk = np.where(msk>0, 1, 0)
+        #t_points = choose_target_points(msk, ts, min_dist=50)
+        #bg_points = choose_bg_points(msk, bgs, min_dist=50)
+        #make dummy points
+        t_points = np.array([[70,235],[218,92],[154,360]])
+        bg_points = np.array([[259,257],[192,148],[220,435]])
         data['t_points'].append(t_points)
         data['bg_points'].append(bg_points)
         data['mask'].append(msk)
     return data
 
 
-def Sammy(data, model):
+class Sammy:
+    
+    def __init__(self, model):
+        self.model = model
+        self.input_image = None
+        self.transform = None
 
     def set_image(self,input_img):
         self.transform = ResizeLongestSide(input_img.shape[0])
         self.input_image = self.transform.apply_image(input_img)
         
 
-    def encode_img(self,model):
+    def encode_img(self):
         #set_image
         transformed_img = self.transform.apply_image(self.input_image)
         transformed_img = torch.as_tensor(transformed_img, device=device)
         transformed_img = transformed_img.permute(2, 0, 1).contiguous()[None, :, :, :]
-        transformed_img = model.preprocess(transformed_img)
-        features = model.image_encoder(transformed_img)
+        transformed_img = self.model.preprocess(transformed_img)
+        features = self.model.image_encoder(transformed_img)
         return features
 
-    def encode_promts(model, image, transform, t_points, bg_points):
+    def encode_promts(self, t_points, bg_points):
         labels = [1]*len(t_points) + [0]*len(bg_points)
-        points = t_points + bg_points
-        point_coords = transform.apply_coords(points, image.shape[:2])
+        points = np.zeros((len(t_points)+len(bg_points),2))
+        points[:len(t_points)] = t_points
+        points[len(t_points):] = bg_points
+        point_coords = self.transform.apply_coords(points,self.input_image.shape[:2])
         coords_torch = torch.as_tensor(point_coords, dtype=torch.float, device=device)
         labels_torch = torch.as_tensor(labels, dtype=torch.int, device=device)
         coords_torch, labels_torch = coords_torch[None, :, :], labels_torch[None, :]
@@ -169,7 +192,7 @@ def Sammy(data, model):
         points=(coords_torch, labels_torch)
 
         box_torch, mask_input_torch = None, None
-        sparse_embeddings, dense_embeddings = model.prompt_encoder(
+        sparse_embeddings, dense_embeddings = self.model.prompt_encoder(
                 points=points,
                 boxes=box_torch,
                 masks=mask_input_torch,
@@ -177,17 +200,17 @@ def Sammy(data, model):
 
         return sparse_embeddings, dense_embeddings
 
-    def decode_features(model, features, sparse_embeddings, dense_embeddings ):
-        low_res_masks, iou_predictions = model.mask_decoder(
+    def decode_features(self, features, sparse_embeddings, dense_embeddings ):
+        low_res_masks, iou_predictions = self.model.mask_decoder(
             image_embeddings = features,
-            image_pe= model.prompt_encoder.get_dense_pe(),
+            image_pe= self.model.prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
             multimask_output= True,
         )
 
         # Upscale the masks to the original image resolution
-        masks = model.postprocess_masks(low_res_masks, input_size, org_shape[:2])
+        masks =self.model.postprocess_masks(low_res_masks, (256,256), (512,512))
 
 
         return masks, iou_predictions, low_res_masks
@@ -259,6 +282,3 @@ def Sammy(data, model):
 
 
 
-
-data = load_data('data/Data/train/')
-sam = load_model()

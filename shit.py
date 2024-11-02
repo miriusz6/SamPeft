@@ -1,29 +1,68 @@
+from train_for_real import *
+import pickle
 
-from PIL import Image
-import numpy as np
+# #Scientific computing 
+# import numpy as np
+# #Pytorch packages
+# import torch
+from torch import nn
+import torch.optim as optim
+from tensorboardX import SummaryWriter
+#Visulization
+from tqdm import tqdm
+import monai
 
-from os import listdir
-from os.path import isfile, join
-from os import getcwd
 
-from train_for_real import choose_bg_points, choose_target_points
 
-curr_dit = getcwd()
-im = Image.open(curr_dit + '/data/DataSmall/train/mask/0.png')
-#im.show()
+#test_D = load_data(test_d=True)
 
-im_arr = np.array(im)
+#save dta as pickle
+# with open('test_data.pkl', 'wb') as file:
+#     pickle.dump(test_D, file)
 
-msk = np.asarray(im)
-msk = np.where(msk>0, 1, 0)
-# t_points = choose_target_points(msk, 5, min_dist=50)
-# bg_points = choose_bg_points(msk, 5, min_dist=50)
 
-tps = choose_target_points(msk, 5, min_dist=50)
-bps = choose_bg_points(msk, 5, min_dist=50)
-# plot points on image
-import matplotlib.pyplot as plt
-plt.imshow(msk)
-plt.scatter(tps[:,1], tps[:,0], color='red')
-plt.scatter(bps[:,1], bps[:,0], color='blue')
-plt.show()
+def test_model(sam,sammy):
+
+    with open('test_data.pkl', 'rb') as file:
+        test_data = pickle.load(file)
+
+    test_data = EyeData(test_data)
+
+    criterion1 = monai.losses.DiceLoss(sigmoid=True, squared_pred=True, to_onehot_y=True,reduction='mean')
+    criterion2 = nn.BCEWithLogitsLoss()
+    mask_downscale_f = Upsample(scale_factor=0.5)    
+
+  
+    sam.eval()
+
+    test_data.divide_into_batches(test_data.length)
+
+    with torch.no_grad():
+        batch = test_data.batches[0]
+        imgs = batch['image']
+        msks = batch['mask']
+        points = batch['points']
+        labels = batch['p_labels']
+
+        img_emb = sammy.encode_img(imgs)
+        
+        sparse_emb, dense_emb = sammy.encode_promts(points=points, labels=labels)
+        _,pred = sammy.decode_features(img_emb, sparse_emb, dense_emb)
+
+        msks = torch.tensor(msks).float().cuda()
+        # from Bx512x512 to Bx1x512x512
+        msks = msks.unsqueeze(1)
+        # from 512x512 to 256x256
+        msks = mask_downscale_f(msks)
+        
+        loss_dice =  criterion1(pred,msks)
+        loss_ce = criterion2(pred,msks)
+        loss =  loss_dice + loss_ce
+        
+        eval_loss =loss.item()
+        dsc_batch = 1-loss_dice
+        dsc = dsc_batch
+        #print(dsc_batch)
+
+        
+        print(f'Eval Loss: {eval_loss}, DSC: {dsc}')

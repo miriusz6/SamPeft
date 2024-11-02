@@ -41,7 +41,7 @@ def parse_args():
     parser.add_argument('-b', type=int, default=4, help='batch size for dataloader')
     parser.add_argument('-s', type=bool, default=True, help='whether shuffle the dataset')
     parser.add_argument('-if_warmup', type=bool, default=False, help='if warm up training phase')
-    parser.add_argument('-warmup_period', type=int, default=200, help='warm up training phase')
+    parser.add_argument('-warmup_period', type=int, default=15, help='warm up training phase')
     parser.add_argument('-lr', type=float, default=1e-3, help='initial learning rate')
     parser.add_argument('-uinch', type=int, default=1, help='input channel of unet')
     parser.add_argument('-imp_lr', type=float, default=3e-4, help='implicit learning rate')

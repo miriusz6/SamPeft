@@ -131,9 +131,15 @@ def load_model(args):
     return mobile_sam_f
 
 
-def load_data():
-    train_img_path = '/data/DataSmall/train/image/'
-    train_mask_path = '/data/DataSmall/train/mask/'
+def load_data(test_d = False):
+    
+    if test_d:
+        train_img_path = '/data/Data/test/image/'
+        train_mask_path = '/data/Data/test/mask/'
+    else:
+        train_img_path = '/data/Data/train/image/'
+        train_mask_path = '/data/Data/train/mask/'
+        
     train_data = _load_data(train_img_path, train_mask_path)
     
     return train_data    

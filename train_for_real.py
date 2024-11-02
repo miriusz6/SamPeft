@@ -42,6 +42,55 @@ from generate_target_ps import choose_bg_points, choose_target_points
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+class EyeData():
+    def __init__(self, data):
+        self.length = len(data['image'])
+        self.images = data['image']
+        self.masks = data['mask']
+        self.points = data['points']
+        self.p_labels = data['p_labels']
+        self.batches = [] 
+    
+    def divide_into_batches(self, batch_size):
+        self.batches = []
+        indxs = np.random.permutation(self.length)
+        for i in range(0, self.length, batch_size):
+            batch_indxs = indxs[i:i+batch_size]
+            imgs = [self.images[j] for j in batch_indxs]
+            imgs = np.array(imgs)
+            masks = [self.masks[j] for j in batch_indxs]
+            masks = np.array(masks)
+            points = [self.points[j] for j in batch_indxs]
+            points = np.array(points)
+            p_labels = [self.p_labels[j] for j in batch_indxs]
+            p_labels = np.array(p_labels)
+            batch = {'image': imgs, 'mask': masks, 'points': points, 'p_labels': p_labels}
+            self.batches.append(batch)
+            
+            
+    
+    
+    # make indexable
+    def __getitem__(self, index):
+        return {'image': self.images[index], 'mask': self.masks[index], 'points': self.points[index], 'p_labels': self.p_labels[index]}
+
+    def __len__(self):
+        return self.length
+    
+    def __iter__(self):
+        self.n = 0
+        return self
+    
+    def __next__(self):
+        if self.n < self.length:
+            result = self.__getitem__(self.n)
+            self.n += 1
+            return result
+        else:
+            raise StopIteration
+        
+    
+
 
 def load_model(args):
 
@@ -120,8 +169,8 @@ def _load_data(img_path, mask_path):
         msk = Image.open(masks_path+msk_name)
         msk = np.asarray(msk)
         msk = np.where(msk>0, 1, 0)
-        t_points = choose_target_points(msk, ts, min_dist=50)
-        bg_points = choose_bg_points(msk, bgs, min_dist=50)
+        t_points = choose_target_points(msk, ts, min_dist=100)
+        bg_points = choose_bg_points(msk, bgs, min_dist=100)
         #make dummy points
         # t_points = [(1,1)]*ts
         # bg_points = [(2,2)]*bgs
@@ -213,7 +262,7 @@ class Sammy:
             image_pe= self.model.prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
-            multimask_output= True,
+            multimask_output= False,
         )
 
         # # Upscale the masks to the original image resolution

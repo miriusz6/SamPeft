@@ -14,11 +14,11 @@ import monai
 
 
 
-#test_D = load_data(test_d=True)
+test_D = load_data(test_d=False)
 
-#save dta as pickle
-# with open('test_data.pkl', 'wb') as file:
-#     pickle.dump(test_D, file)
+
+with open('train_data.pkl', 'wb') as file:
+    pickle.dump(test_D, file)
 
 
 def test_model(sam,sammy):

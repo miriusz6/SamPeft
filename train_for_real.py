@@ -13,7 +13,6 @@ from PIL import Image
 import numpy as np
 import torch
 
-from skimage.measure import label
 
 #Scientific computing 
 import numpy as np
@@ -24,21 +23,19 @@ import torch
 from PIL import Image
 
 
-import matplotlib.pyplot as plt
-
-
-from finetuneSAM.models.sam.utils.transforms import ResizeLongestSide
 from finetuneSAM.models.sam import  sam_model_registry
 
-
+import torchvision.transforms.v2 as tr 
 
 
 from os import listdir
 from os.path import isfile, join
 from os import getcwd
 from generate_target_ps import choose_bg_points, choose_target_points
+from tqdm import tqdm
+import torchvision
 
-
+import math
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -51,7 +48,7 @@ class EyeData():
         self.p_labels = data['p_labels']
         self.batches = [] 
     
-    def divide_into_batches(self, batch_size):
+    def divide_into_batches(self, batch_size, augment = True):
         self.batches = []
         indxs = np.random.permutation(self.length)
         for i in range(0, self.length, batch_size):
@@ -65,11 +62,78 @@ class EyeData():
             p_labels = [self.p_labels[j] for j in batch_indxs]
             p_labels = np.array(p_labels)
             batch = {'image': imgs, 'mask': masks, 'points': points, 'p_labels': p_labels}
+            if augment:
+                batch = self.augment_batch(batch)
+
+            # normalize images
+            pixel_mean  = [123.675, 116.28, 103.53],
+            pixel_std = [58.395, 57.12, 57.375]
+            imgs = batch['image']
+            batch['image'] = (imgs - pixel_mean) / pixel_std
             self.batches.append(batch)
             
-            
+    def augment_batch(self, batch):
+        imgs = batch['image']
+        masks = batch['mask']
+        points = batch['points']
+        p_labels = batch['p_labels']
+        # get random angles
+        angles = np.random.randint(0, 359, len(imgs))
+        #angles = [90]*len(imgs)
+        
+        # rotate masks
+        masks = self.rotate_imgs(masks, angles)
+
+        # rotate images
+        imgs = self.rotate_imgs(imgs, angles)
+
+        # add random noise
+        imgs = self.add_g_noise(imgs)
+
+        # rotate points
+        points = [self.rotate_points((512//2,512//2), p, math.radians(a)) for p, a in zip(points, angles)]
+
+        
+
+        return {'image': imgs, 'mask': masks, 'points': points, 'p_labels': p_labels}
+     
     
+
+    def rotate_p_origin(self,origin, point, angle):
+        """
+        Rotate a point counterclockwise by a given angle around a given origin.
+
+        The angle should be given in rad.
+        """
+        ox, oy = origin
+        px, py = point
+
+        qx = ox + math.cos(angle) * (px - ox) - math.sin(angle) * (py - oy)
+        qy = oy + math.sin(angle) * (px - ox) + math.cos(angle) * (py - oy)
+        return np.array([int(qx), int(qy)])
+
+    def rotate_points(self,origin, points, angle):
+        return np.array([self.rotate_p_origin(origin, p, angle) for p in points])
     
+    def rotate_img(self,img, angle):
+        img = Image.fromarray(img)
+        img = img.rotate(angle)
+        return np.array(img)
+    
+    def rotate_imgs(self, imgs, angles):
+        return np.array([self.rotate_img(img, angle) for img, angle in zip(imgs, angles)])
+    
+    def add_g_noise(self, imgs):
+        imgs = torch.tensor(imgs).float()
+        imgs = imgs.permute(0, 3, 1, 2)#.contiguous()
+        t = tr.GaussianNoise()
+        imgs = imgs + t(imgs)
+        imgs = imgs.permute(0, 2, 3, 1)#.contiguous()
+        imgs = imgs.long()
+        return imgs.numpy()
+        
+
+
     # make indexable
     def __getitem__(self, index):
         return {'image': self.images[index], 'mask': self.masks[index], 'points': self.points[index], 'p_labels': self.p_labels[index]}
@@ -170,8 +234,9 @@ def _load_data(img_path, mask_path):
         img = np.asarray(img)
         data['image'].append(img)
     
-
-    for msk_name in msks_names:
+    pbar = tqdm(range(len(msks_names)))
+    for i in pbar:
+        msk_name = msks_names[i]
         msk = Image.open(masks_path+msk_name)
         msk = np.asarray(msk)
         msk = np.where(msk>0, 1, 0)
@@ -216,7 +281,7 @@ class Sammy:
         
         #set_image
         input_images = np.array(input_images)
-        transformed_imgs = torch.as_tensor(input_images, device=device)
+        transformed_imgs = torch.as_tensor(input_images, device=device, dtype=torch.float32)
         transformed_imgs = transformed_imgs.permute(0, 3, 1, 2)#.contiguous()
         transformed_imgs = self.input_img_scaleF(transformed_imgs)
         transformed_imgs = self.model.preprocess(transformed_imgs) 

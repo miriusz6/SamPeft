@@ -18,7 +18,7 @@ def parse_args():
     
     parser.add_argument('-dir_checkpoint', type=str, default='checkpoints', help='the checkpoint folder to save final model')
     parser.add_argument('-num_cls', type=int, default=3, help='the number of output channels (need to be your target cls num +1)')
-    parser.add_argument('-epochs', type=int, default=200, help='the number of largest epochs to train')
+    parser.add_argument('-epochs', type=int, default=80, help='the number of largest epochs to train')
     parser.add_argument('-sam_ckpt', type=str, default='mobile_sam.pt', help='the path to the checkpoint to load')
     
     parser.add_argument('-type', type=str, default='map', help='condition type:ave,rand,rand_map')
@@ -58,13 +58,15 @@ def parse_args():
     parser.add_argument('-if_update_encoder', type=bool, default=False , help='if update_image_encoder')
     parser.add_argument('-if_encoder_adapter', type=bool, default=False , help='if add adapter to encoder')
     
-    parser.add_argument('-encoder-adapter-depths', type=list, default=[0,1,10,11] , help='the depth of blocks to add adapter')
+    parser.add_argument('-encoder-adapter-depths', type=list, default=[2] , help='the depth of blocks to add adapter')
+    #parser.add_argument('-encoder-adapter-depths', type=list, default=[0,1,10,11] , help='the depth of blocks to add adapter')
     parser.add_argument('-if_mask_decoder_adapter', type=bool, default=False , help='if add adapter to mask decoder')
     parser.add_argument('-decoder_adapt_depth', type=int, default=2, help='the depth of the decoder adapter')
     
     parser.add_argument('-if_encoder_lora_layer', type=bool, default=False , help='if add lora to encoder')
     parser.add_argument('-if_decoder_lora_layer', type=bool, default=False , help='if add lora to decoder')
-    parser.add_argument('-encoder_lora_layer', type=list, default=[0,1,10,11] , help='the depth of blocks to add lora, if [], it will add at each layer')
+    #parser.add_argument('-encoder_lora_layer', type=list, default=[0,1,10,11] , help='the depth of blocks to add lora, if [], it will add at each layer')
+    parser.add_argument('-encoder_lora_layer', type=list, default=[2] , help='the depth of blocks to add lora, if [], it will add at each layer')
     
     parser.add_argument('-if_split_encoder_gpus', type=bool, default=False , help='if split encoder to multiple gpus')
     parser.add_argument('-devices', type=list, default=[0,1] , help='if split encoder to multiple gpus')

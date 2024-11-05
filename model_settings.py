@@ -13,6 +13,9 @@ from finetuneSAM.cfg import parse_args
 def get_args(setting_num):
     args =  parse_args()
     args.num_cls = 3
+    if setting_num == 0:
+        #encoder None, decoder adapter
+        args.finetune_type = "vanilla"
     if setting_num == 1:
         #encoder None, decoder adapter
         args.finetune_type = "adapter"

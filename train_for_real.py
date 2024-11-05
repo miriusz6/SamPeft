@@ -223,8 +223,8 @@ def _load_data(img_path, mask_path):
     msks_names = [f for f in listdir(masks_path) if isfile(join(masks_path, f))]
 
     
-    ts = 5
-    bgs = 5
+    ts = 1
+    bgs = 1
     labels = [1]*ts + [0]*bgs
 
     data = {'image': [], 'mask': [], 'points': [], 'p_labels': []}
@@ -256,6 +256,9 @@ def _load_data(img_path, mask_path):
     return data
 
 from torch.nn import Upsample
+import monai
+from torch import nn
+from shit import visualize_prediction
 class Sammy:
     
     def __init__(self, model, orginal_input_size):
@@ -343,3 +346,38 @@ class Sammy:
         return iou_predictions, low_res_masks
         #return None, None, None
 
+
+    def predict(self, input_images, points, labels):
+        with torch.no_grad():
+            img_emb = self.encode_img(input_images)
+            sparse_emb, dense_emb = self.encode_promts(points=points, labels=labels)
+            iou_predictions, pred = self.decode_features(img_emb, sparse_emb, dense_emb)
+        return iou_predictions, pred
+    
+    def predict_w_score(self, input_images, points, labels, masks, visualize = False):
+        with torch.no_grad():
+            img_emb = self.encode_img(input_images)
+            sparse_emb, dense_emb = self.encode_promts(points=points, labels=labels)
+            iou_predictions, pred = self.decode_features(img_emb, sparse_emb, dense_emb)
+
+        msks = torch.tensor(masks).float().cuda()
+        # from Bx512x512 to Bx1x512x512
+        msks = msks.unsqueeze(1)
+        # from 512x512 to 256x256
+        mask_downscale_f = Upsample(scale_factor=0.5)
+        msks = mask_downscale_f(msks)
+        
+        criterion1 = monai.losses.DiceLoss(sigmoid=True, squared_pred=True, reduction='mean')
+        criterion2 = nn.BCEWithLogitsLoss()
+        loss_dice =  criterion1(pred,msks)
+        loss_bce = criterion2(pred,msks)
+
+        visual = None
+        if visualize:
+            visual = []
+            for i in range(0, pred.shape[0]):
+                p = pred[i][0].detach().cpu().numpy()
+                m = msks[i][0].detach().cpu().numpy()
+                visual.append(visualize_prediction(p,m))
+            visual = np.array(visual)
+        return {'iou': iou_predictions, 'pred': pred, 'loss_dice': loss_dice, 'loss_bce': loss_bce, 'visual': visual}

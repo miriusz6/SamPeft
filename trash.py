@@ -4,57 +4,97 @@ from matplotlib.widgets import Button
 
 
 
-# # from train_for_real import *
-# # import pickle
-# # from model_settings import get_args
-# # from finetuneSAM.models.sam_LoRa import LoRA_Sam
 
-# # # # model setting
-# # # setting = 6
 
-# # # args =  get_args(setting)
-# # # sam = load_model(args)
+from train_for_real import *
+import pickle
+from model_settings import get_args
+from finetuneSAM.models.sam_LoRa import LoRA_Sam
 
-# # # if args.finetune_type == 'lora':
-# # #     sam = LoRA_Sam(args,sam,r=2).sam
+# model setting
+setting = 6
+
+args =  get_args(setting)
+sam = load_model(args)
+
+if args.finetune_type == 'lora':
+    sam = LoRA_Sam(args,sam,r=2).sam
     
 
-# # # # checkpoints\eLdL\+checkpoint_best.pth
-# # # with open('checkpoints\eLdL\+checkpoint_best.pth', 'rb') as file:
-# # #     model_checkpoint = torch.load(file)
+# checkpoints\eLdL\+checkpoint_best.pth
+with open('checkpoints\eLdL\+checkpoint_best.pth', 'rb') as file:
+    model_checkpoint = torch.load(file)
 
-# # # sam.load_state_dict(model_checkpoint)
-# # # sam.to('cuda')
-# # # sammy = Sammy(sam, (512,512))
-
-
-# # # with open('small_data_1.pkl', 'rb') as file:
-# # #     small_data_15 = pickle.load(file)
-# # # small_data_15 = EyeData(small_data_15)
-# # # small_data_15.divide_into_batches(1,augment=False)
-# # # mini_b = small_data_15.batches[0]
-
-
-# # # imgs,ps,lbls, masks = mini_b['image'],mini_b['points'],mini_b['p_labels'],mini_b['mask']
-
-# # # current_visual = None
-
-
-
-# # # def revisualize():
-# # #     ret = sammy.predict_w_score(input_images= imgs, points= ps, labels=lbls, masks=masks, visualize=True)
-# # #     dice, bcee, iou = ret['loss_dice'], ret['loss_bce'], ret['iou']
-# # #     print('Dice:',dice)
-# # #     print('BCE:',bcee)
-# # #     print('IoU:',iou)
-# # #     global current_visual
-# # #     current_visual = ret['visual'][1]
+sam.load_state_dict(model_checkpoint)
+sam.to('cuda')
+sammy = Sammy(sam, (512,512))
 
 
 
 
+with open('small_data_1.pkl', 'rb') as file:
+    small_data_1 = pickle.load(file)
+small_data_1 = EyeData(small_data_1)
+small_data_1.divide_into_batches(1,augment=False)
+mini_b = small_data_1.batches[0]
 
 
+imgs,ps,lbls, masks = mini_b['image'],mini_b['points'],mini_b['p_labels'],mini_b['mask']
+
+sammy.set_images(imgs)
+
+ret = sammy.predict_from_set(ps,lbls,masks, visualize=True)
+
+current_image = ret['visual'][0]
+
+target_points = [ps[0][lbls[0]==1]]
+background_points = [ps[0][lbls[0]==0]]
+
+
+
+def revisualize(new_target_points, new_background_points):
+    global current_image
+    global target_points
+    global background_points
+    global current_visual
+    prev_target_points = np.array(target_points).reshape(1,len(target_points),2)
+    prev_background_points = np.array(background_points).reshape(1,len(background_points),2)
+    all_points = np.zeros(
+        (1,
+         len(target_points)+len(background_points),
+          2
+        ))
+    prev_t_ps = prev_target_points.shape[1]
+    prev_b_ps = prev_background_points.shape[1]
+    new_t_ps = new_target_points.shape[1]
+    new_b_ps = new_background_points.shape[1]
+    
+    all_points[0][:prev_t_ps] = prev_target_points
+    all_points[0][prev_t_ps:prev_t_ps+new_t_ps] = new_target_points
+    all_points[0][prev_t_ps+new_t_ps:prev_t_ps+new_t_ps+prev_b_ps] = prev_background_points
+    all_points[0][prev_t_ps+new_t_ps+prev_b_ps:] = new_background_points
+    
+    all_labels = np.zeros(
+        (1,
+         len(target_points)+len(background_points)
+        ))
+    all_labels[0][:prev_t_ps+new_t_ps] = 1
+    all_labels.reshape(1,all_labels.shape[1],1)
+    _ret = sammy.predict_from_set(all_points,all_labels,masks, visualize=True)
+    current_visual = _ret['visual'][0]
+
+revisualize(np.array([[1,1]]),np.array([[2,2]]))
+# plot the image
+
+
+def draw_points(target_points, background_points):
+    # draw points 5x5
+    for point in target_points:
+        plt.plot(point[0],point[1],)
+
+plt.imshow(current_image)
+
+point_label = None
    
 
 def main():
@@ -69,36 +109,41 @@ def main():
         if not event.inaxes == ax1:
             return
         print('The Click Event Triggered!:',event.xdata, event.ydata)
+        # redraw with new points
+        # change image
+        
     cid = fig.canvas.mpl_connect('button_press_event', on_image_click)
-    #check_box = CheckButtons(axs[1], ['Target','Background'], [False,False], check_props={'color':'red', 'linewidth':5})
-    check_box1 = Button(ax2, 'Background', color='white', hovercolor='gold')
-    check_box2 = Button(ax3, 'Target', color='white', hovercolor='gold')
+    
+    
+    bg_button = Button(ax2, 'Background', color='white', hovercolor='gold')
+    t_button = Button(ax3, 'Target', color='white', hovercolor='gold')
 
     def on_checkbox_click(event):
+        global point_label
         if event.inaxes == ax2:
             #'Background'
-            check_box1.color = 'red'
-            check_box2.color = 'white'
+            if bg_button.color == 'red':
+                bg_button.color = 'white'
+                point_label = None
+            else:
+                bg_button.color = 'red'
+                point_label = 0
+            t_button.color = 'white'
         elif event.inaxes == ax3:
             # Target
-            check_box2.color = 'green'
-            check_box1.color = 'white'
+            if t_button.color == 'green':
+                t_button.color = 'white'
+                point_label = None
+            else:
+                t_button.color = 'green'
+                point_label = 1
+            bg_button.color = 'white'
         else:
             return
         
+    bg_button.on_clicked(on_checkbox_click)
+    t_button.on_clicked(on_checkbox_click)
     
-    check_box1.on_clicked(on_checkbox_click)
-    check_box2.on_clicked(on_checkbox_click)
-    
-    # def on_checkbox_click(label):
-    #     print('The Checkbox 1 Event Triggered! ',label)
-    #     if label == 'Background':
-    #         check_box.set_active(0, False)
-    #     # elif label == 'Target':
-    #     #     check_box.set_active(1, False)
-    #     else:
-    #         print('Error: Unknown Label')
-
     
     
 

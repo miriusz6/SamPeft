@@ -271,6 +271,8 @@ class Sammy:
 
         self.input_img_scaleF = Upsample(scale_factor=self.input_img_scale)
         self.output_mask_scaleF = Upsample(scale_factor=self.output_mask_scale)
+        
+        self.last_image_embeddings = None
 
         
     def encode_img(self, input_images: np.ndarray):
@@ -309,26 +311,7 @@ class Sammy:
             )
 
         return sparse_embeddings, dense_embeddings
-        # labels = [1]*len(t_points) + [0]*len(bg_points)
-        # points = np.zeros((len(t_points)+len(bg_points),2))
-        # points[:len(t_points)] = t_points
-        # points[len(t_points):] = bg_points
-        # #point_coords = self.transform.apply_coords(points,self.input_image.shape[:2])
-        # coords_torch = torch.as_tensor(point_coords, dtype=torch.float, device=device)
-        # labels_torch = torch.as_tensor(labels, dtype=torch.int, device=device)
-        # coords_torch, labels_torch = coords_torch[None, :, :], labels_torch[None, :]
-
-
-        # points=(coords_torch, labels_torch)
-
-        # box_torch, mask_input_torch = None, None
-        # sparse_embeddings, dense_embeddings = self.model.prompt_encoder(
-        #         points=points,
-        #         boxes=box_torch,
-        #         masks=mask_input_torch,
-        #     )
-
-        # return sparse_embeddings, dense_embeddings
+       
 
     def decode_features(self, features, sparse_embeddings, dense_embeddings ):
         low_res_masks, iou_predictions = self.model.mask_decoder(
@@ -339,45 +322,90 @@ class Sammy:
             multimask_output= False,
         )
 
-        # # Upscale the masks to the original image resolution
-        # masks =self.model.postprocess_masks(low_res_masks, (1024,1024), (1024,1024))
-
-
         return iou_predictions, low_res_masks
         #return None, None, None
 
 
-    def predict(self, input_images, points, labels):
-        with torch.no_grad():
-            img_emb = self.encode_img(input_images)
-            sparse_emb, dense_emb = self.encode_promts(points=points, labels=labels)
-            iou_predictions, pred = self.decode_features(img_emb, sparse_emb, dense_emb)
-        return iou_predictions, pred
+    # def predict(self, input_images, points, labels):
+    #     with torch.no_grad():
+    #         img_emb = self.encode_img(input_images)
+    #         sparse_emb, dense_emb = self.encode_promts(points=points, labels=labels)
+    #         iou_predictions, pred = self.decode_features(img_emb, sparse_emb, dense_emb)
+    #     return iou_predictions, pred
     
-    def predict_w_score(self, input_images, points, labels, masks, visualize = False):
+    def predict(self, input_images, points, labels, masks = None, score = True, visualize = False):
         with torch.no_grad():
             img_emb = self.encode_img(input_images)
             sparse_emb, dense_emb = self.encode_promts(points=points, labels=labels)
             iou_predictions, pred = self.decode_features(img_emb, sparse_emb, dense_emb)
 
-        msks = torch.tensor(masks).float().cuda()
-        # from Bx512x512 to Bx1x512x512
-        msks = msks.unsqueeze(1)
-        # from 512x512 to 256x256
-        mask_downscale_f = Upsample(scale_factor=0.5)
-        msks = mask_downscale_f(msks)
         
-        criterion1 = monai.losses.DiceLoss(sigmoid=True, squared_pred=True, reduction='mean')
-        criterion2 = nn.BCEWithLogitsLoss()
-        loss_dice =  criterion1(pred,msks)
-        loss_bce = criterion2(pred,msks)
+        loss_dice = None
+        loss_bce = None        
+        if score:
+            if masks is None:
+                raise ValueError('masks must be provided if score is set to True')
+            msks = torch.tensor(masks).float().cuda()
+            # from Bx512x512 to Bx1x512x512
+            msks = msks.unsqueeze(1)
+            # from 512x512 to 256x256
+            mask_downscale_f = Upsample(scale_factor=0.5)
+            msks = mask_downscale_f(msks)
+            
+            criterion1 = monai.losses.DiceLoss(sigmoid=True, squared_pred=True, reduction='mean')
+            criterion2 = nn.BCEWithLogitsLoss()
+            loss_dice =  criterion1(pred,msks)
+            loss_bce = criterion2(pred,msks)
 
         visual = None
         if visualize:
+            if masks is None:
+                raise ValueError('masks must be provided if visualize is set to True')
             visual = []
             for i in range(0, pred.shape[0]):
                 p = pred[i][0].detach().cpu().numpy()
                 m = msks[i][0].detach().cpu().numpy()
                 visual.append(visualize_prediction(p,m))
             visual = np.array(visual)
+        return {'iou': iou_predictions, 'pred': pred, 'loss_dice': loss_dice, 'loss_bce': loss_bce, 'visual': visual}
+
+    def set_images(self, input_images):
+        with torch.no_grad():
+            img_emb = self.encode_img(input_images)
+        self.last_image_embeddings = img_emb
+    
+    def predict_from_set(self, points, labels, masks = None, score = True, visualize = False):
+        with torch.no_grad():
+            sparse_emb, dense_emb = self.encode_promts(points=points, labels=labels)
+            iou_predictions, pred = self.decode_features(self.last_image_embeddings,
+                                                         sparse_emb, dense_emb)
+        
+        loss_dice = None
+        loss_bce = None        
+        if score:
+            if masks is None:
+                raise ValueError('masks must be provided if score is set to True')
+            msks = torch.tensor(masks).float().cuda()
+            # from Bx512x512 to Bx1x512x512
+            msks = msks.unsqueeze(1)
+            # from 512x512 to 256x256
+            mask_downscale_f = Upsample(scale_factor=0.5)
+            msks = mask_downscale_f(msks)
+            
+            criterion1 = monai.losses.DiceLoss(sigmoid=True, squared_pred=True, reduction='mean')
+            criterion2 = nn.BCEWithLogitsLoss()
+            loss_dice =  criterion1(pred,msks)
+            loss_bce = criterion2(pred,msks)
+
+        visual = None
+        if visualize:
+            if masks is None:
+                raise ValueError('masks must be provided if visualize is set to True')
+            visual = []
+            for i in range(0, pred.shape[0]):
+                p = pred[i][0].detach().cpu().numpy()
+                m = msks[i][0].detach().cpu().numpy()
+                visual.append(visualize_prediction(p,m))
+            visual = np.array(visual)
+            
         return {'iou': iou_predictions, 'pred': pred, 'loss_dice': loss_dice, 'loss_bce': loss_bce, 'visual': visual}

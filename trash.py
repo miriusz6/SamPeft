@@ -47,8 +47,8 @@ ret = sammy.predict_from_set(ps,lbls,masks, visualize=True)
 
 current_image = ret['visual'][0]
 
-target_points = [ps[0][lbls[0]==1]]
-background_points = [ps[0][lbls[0]==0]]
+target_points = list(ps[0][:sum(lbls[0])])
+background_points = list(ps[0][sum(lbls[0]):])
 
 
 
@@ -154,6 +154,7 @@ def main():
     while True:
         plt.draw()
         plt.pause(0.001)
+        
 
 
 if __name__ == '__main__':

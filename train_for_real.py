@@ -6,8 +6,7 @@ import numpy as np
 import torch
 
 from PIL import Image
-
-
+import random
 
 # General
 import numpy as np
@@ -61,6 +60,7 @@ class EyeData():
             points = np.array(points)
             p_labels = [self.p_labels[j] for j in batch_indxs]
             p_labels = np.array(p_labels)
+            points, p_labels = self.draw_random_points(points, p_labels)
             batch = {'image': imgs, 'mask': masks, 'points': points, 'p_labels': p_labels}
             if augment:
                 batch = self.augment_batch(batch)
@@ -71,6 +71,33 @@ class EyeData():
             imgs = batch['image']
             batch['image'] = (imgs - pixel_mean) / pixel_std
             self.batches.append(batch)
+
+    def draw_random_points(self, points, labels):
+        all_points = []#np.zeros((points.shape[0]))
+        all_labels = []#np.zeros((points.shape[0]))
+
+        # Draw the same number of target/background points for each image 
+        # in the batch
+        target_cnt = sum(labels[0])
+        # draw 1 random number between 0 and targget_cnt
+        t_to_draw = random.randint(1, target_cnt)
+        # draw 1 random number between target_cnt and len(points)
+        bg_to_draw = random.randint(1, len(points[0])-target_cnt)
+        for i,ps,lbls in zip(range(points.shape[0]), points, labels):
+            t_points = np.random.choice(range(target_cnt),t_to_draw, replace=False)
+            bg_points = np.random.choice(range(target_cnt, len(ps)),bg_to_draw, replace=False)
+            all_ps = np.zeros((t_to_draw+bg_to_draw,2))
+            all_ps[:t_to_draw] = ps[t_points]
+            all_ps[t_to_draw:] = ps[bg_points]
+            new_lbls = np.zeros(t_to_draw+bg_to_draw)
+            new_lbls[:t_to_draw] = 1
+            all_points.append(all_ps)
+            all_labels.append(new_lbls)
+        all_points = np.array(all_points)
+        all_labels = np.array(all_labels)
+        return all_points, all_labels
+
+
             
     def augment_batch(self, batch):
         imgs = batch['image']
@@ -92,8 +119,6 @@ class EyeData():
 
         # rotate points
         points = [self.rotate_points((512//2,512//2), p, math.radians(a)) for p, a in zip(points, angles)]
-
-        
 
         return {'image': imgs, 'mask': masks, 'points': points, 'p_labels': p_labels}
      
@@ -223,8 +248,8 @@ def _load_data(img_path, mask_path):
     msks_names = [f for f in listdir(masks_path) if isfile(join(masks_path, f))]
 
     
-    ts = 1
-    bgs = 1
+    ts = 20
+    bgs = 20
     labels = [1]*ts + [0]*bgs
 
     data = {'image': [], 'mask': [], 'points': [], 'p_labels': []}
@@ -240,8 +265,8 @@ def _load_data(img_path, mask_path):
         msk = Image.open(masks_path+msk_name)
         msk = np.asarray(msk)
         msk = np.where(msk>0, 1, 0)
-        t_points = choose_target_points(msk, ts, min_dist=100)
-        bg_points = choose_bg_points(msk, bgs, min_dist=100)
+        t_points = choose_target_points(msk, ts, min_dist=20)
+        bg_points = choose_bg_points(msk, bgs, min_dist=20)
         #make dummy points
         # t_points = [(1,1)]*ts
         # bg_points = [(2,2)]*bgs
@@ -289,23 +314,23 @@ class Sammy:
         transformed_imgs = torch.as_tensor(input_images, device=device, dtype=torch.float32)
         transformed_imgs = transformed_imgs.permute(0, 3, 1, 2)#.contiguous()
         transformed_imgs = self.input_img_scaleF(transformed_imgs)
-        transformed_imgs = self.model.preprocess(transformed_imgs) 
+        #transformed_imgs = self.model.preprocess(transformed_imgs) 
         features = self.model.image_encoder(transformed_imgs)
         return features
 
     def encode_promts(self, points, labels):
-        #point_coords = self.transform.apply_coords(points,self.input_image.shape[:2])
-        points = np.array(points) * self.input_img_scale 
-        coords_torch = torch.as_tensor(points, dtype=torch.float, device=device)
-        labels_torch = torch.as_tensor(labels, dtype=torch.int, device=device)
-        #coords_torch, labels_torch = coords_torch[None, :, :], labels_torch[None, :]
+        box_torch, mask_input_torch, ps_lbls = None, None, None
+        
+        if points is not None:
+            points = np.array(points) * self.input_img_scale 
+            coords_torch = torch.as_tensor(points, dtype=torch.float, device=device)
+            labels_torch = torch.as_tensor(labels, dtype=torch.int, device=device)
+            ps_lbls=(coords_torch, labels_torch)
+            #coords_torch, labels_torch = coords_torch[None, :, :], labels_torch[None, :]
+            #point_coords = self.transform.apply_coords(points,self.input_image.shape[:2])
 
-
-        points=(coords_torch, labels_torch)
-
-        box_torch, mask_input_torch = None, None
         sparse_embeddings, dense_embeddings = self.model.prompt_encoder(
-                points=points,
+                points=ps_lbls,
                 boxes=box_torch,
                 masks=mask_input_torch,
             )
